@@ -329,6 +329,14 @@ void NodeCanopenBaseDriver<NODETYPE>::add_to_master()
     }
   }
 
+  if (start_node_)
+  {
+    auto cmd =
+      reset_communication_ ? canopen::NmtCommand::RESET_COMM : canopen::NmtCommand::RESET_NODE;
+    this->lely_driver_->nmt_command(cmd);
+    this->lely_driver_->nmt_command(canopen::NmtCommand::START);
+  }
+
   if (diagnostic_enabled_.load())
   {
     diagnostic_collector_->updateAll(
