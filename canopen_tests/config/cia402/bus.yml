@@ -15,6 +15,7 @@ defaults:
   revision_number: 0
   boot_timeout_ms: 1000
   sdo:
+    - {index: 0x1017, sub_index: 0} # Heartbeat producer
     - {index: 0x60C2, sub_index: 1, value: 50} # Set interpolation time for cyclic modes to 50 ms
     - {index: 0x60C2, sub_index: 2, value: -3} # Set base 10-3s
     - {index: 0x6081, sub_index: 0, value: 1000}
