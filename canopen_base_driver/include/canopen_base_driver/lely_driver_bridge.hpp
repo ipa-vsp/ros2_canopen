@@ -241,7 +241,8 @@ enum class LelyBridgeErrc
   NmtSlaveInitiallyOperational = 'L',
   ProductCodeDifference = 'M',
   RevisionCodeDifference = 'N',
-  SerialNumberDifference = 'O'
+  SerialNumberDifference = 'O',
+  TimeOut = 'T'
 };
 
 struct LelyBridgeErrCategory : std::error_category
@@ -311,9 +312,12 @@ protected:
   canopen::NmtState boot_state;
   std::condition_variable boot_cond;
   std::mutex boot_mtex;
+  std::chrono::milliseconds boot_timeout_;
 
   uint8_t nodeid;
   std::string name_;
+
+  std::chrono::milliseconds sdo_timeout;
 
   std::function<void()> on_sync_function_;
 
@@ -385,6 +389,8 @@ protected:
    */
   void OnEmcy(uint16_t eec, uint8_t er, uint8_t msef[5]) noexcept override;
 
+  // void OnConfig(::std::function<void(::std::error_code ec)> res) noexcept override;
+
 public:
   using FiberDriver::FiberDriver;
 
@@ -396,11 +402,13 @@ public:
    * @param [in] id       NodeId to connect to
    * @param [in] eds      EDS file
    * @param [in] bin      BIN file (concise dcf)
+   * @param [in] timeout  Timeout in milliseconds for SDO reads/writes
    *
    */
   LelyDriverBridge(
     ev_exec_t * exec, canopen::AsyncMaster & master, uint8_t id, std::string name, std::string eds,
-    std::string bin)
+    std::string bin, std::chrono::milliseconds timeout = 20ms,
+    std::chrono::milliseconds boot_timeout = 20ms)
   : FiberDriver(exec, master, id),
     rpdo_queue(new SafeQueue<COData>()),
     emcy_queue(new SafeQueue<COEmcy>())
@@ -417,6 +425,8 @@ public:
       dictionary_->readDCF(a, b, bin.c_str());
     }
     pdo_map_ = dictionary_->createPDOMapping();
+    sdo_timeout = timeout;
+    boot_timeout_ = boot_timeout;
   }
 
   /**
@@ -476,7 +486,7 @@ public:
         this->running = false;
         this->sdo_cond.notify_one();
       },
-      20ms);
+      this->sdo_timeout);
     return prom->get_future();
   }
 
@@ -568,7 +578,7 @@ public:
         this->running = false;
         this->sdo_cond.notify_one();
       },
-      20ms);
+      this->sdo_timeout);
     return prom->get_future();
   }
 
@@ -668,22 +678,24 @@ public:
    */
   bool wait_for_boot()
   {
-    if (booted.load())
-    {
-      return true;
-    }
+    if (booted.load()) return true;
+
     std::unique_lock<std::mutex> lck(boot_mtex);
-    boot_cond.wait(lck);
+    auto status = boot_cond.wait_for(lck, boot_timeout_);
+
+    if (status == std::cv_status::timeout)
+    {
+      throw std::system_error(
+        static_cast<int>(LelyBridgeErrc::TimeOut), LelyBridgeErrCategory(), "Boot Timeout");
+    }
+
     if ((boot_status != 0) && (boot_status != 'L'))
     {
-      throw std::system_error(boot_status, LelyBridgeErrCategory(), "Boot Issue");
+      throw std::system_error(static_cast<int>(boot_status), LelyBridgeErrCategory(), "Boot Issue");
     }
-    else
-    {
-      booted.store(true);
-      return true;
-    }
-    return false;
+
+    booted.store(true);
+    return true;
   }
 
   void set_sync_function(std::function<void()> on_sync_function)
@@ -736,7 +748,7 @@ public:
         this->running = false;
         this->sdo_cond.notify_one();
       },
-      20ms);
+      this->sdo_timeout);
   }
 
   template <typename T>
@@ -763,7 +775,7 @@ public:
         this->running = false;
         this->sdo_cond.notify_one();
       },
-      20ms);
+      this->sdo_timeout);
   }
 
   template <typename T>
@@ -782,7 +794,7 @@ public:
     }
     if (!is_tpdo)
     {
-      if (sync_sdo_read_typed<T>(index, subindex, value, std::chrono::milliseconds(20)))
+      if (sync_sdo_read_typed<T>(index, subindex, value, this->sdo_timeout))
       {
         return value;
       }
@@ -839,7 +851,7 @@ public:
     }
     else
     {
-      sync_sdo_write_typed(index, subindex, value, std::chrono::milliseconds(20));
+      sync_sdo_write_typed(index, subindex, value, this->sdo_timeout);
     }
   }
 };

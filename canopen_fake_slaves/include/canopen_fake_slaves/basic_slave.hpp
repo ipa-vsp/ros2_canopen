@@ -37,8 +37,16 @@ class SimpleSlave : public canopen::BasicSlave
 {
 public:
   using BasicSlave::BasicSlave;
+  ~SimpleSlave()
+  {
+    if (message_thread.joinable())
+    {
+      message_thread.join();
+    }
+  }
 
 protected:
+  std::thread message_thread;
   /**
    * @brief This function gets an object value through the typed interface.
    * Only supports object types that can fit in a 32-bit container.
@@ -94,7 +102,7 @@ protected:
 
   /**
    * @brief This function is called when a value is written to the local object dictionary by an SDO
-   * or RPDO. Also copies the RPDO value to TPDO.
+   * or RPDO. Also copies the RPDO value to TPDO. A function from the class Device
    * @param idx The index of the PDO.
    * @param subidx The subindex of the PDO.
    */
@@ -102,6 +110,29 @@ protected:
   {
     (*this)[0x4001][0] = this->GetValue(idx, subidx);
     this->TpdoEvent(0);
+
+    // Publish periodic message
+    if (!message_thread.joinable())
+    {
+      message_thread = std::thread(std::bind(&SimpleSlave::fake_periodic_messages, this));
+    }
+  }
+
+  /**
+   * @brief This function is attached to a thread and sends periodic messages
+   * via 0x4004
+   */
+  void fake_periodic_messages()
+  {
+    // If ros is running, send messages
+    while (rclcpp::ok())
+    {
+      uint32_t val = 0x1122;
+      (*this)[0x4004][0] = val;
+      this->TpdoEvent(0);
+      // 100 ms sleep - 10 Hz
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
   }
 };
 
